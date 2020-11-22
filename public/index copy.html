@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>ADCC_Mapping</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>Tensorflow js</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
+    <!--mapbox.js-->
+    <script src='https://api.mapbox.com/mapbox.js/v3.3.1/mapbox.js'></script>
+    <!--텐서플루우js 라이브러리-->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-vis"></script>
+    <!--텐서플로우 시각화 라이브러리-->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <!-- materialize UI 라이브러리 -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <!--스타일 시트-->
+    <link rel="stylesheet" href="css/style.css">
+    <!--main color-->
+    <link rel="stylesheet" href="css/main-color.css" id="colors">
+    <!--map.css-->
+    <link rel="stylesheet" href="css/map.css">
+    <!--navigation style-->
+
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+    <link rel="stylesheet" href="/resources/demos/style.css">
+    <style>
+        .style-8 {
+            position: fixed;
+            text-align: center;
+            width: 100%;
+            height: 65px;
+            display: block;
+            top: 0;
+            left: 5px;
+            content: "";
+            background: #333;
+            width: 2030px;
+            text-decoration: none;
+            list-style-type: none;
+        }
+
+        .style-9 {
+
+            color: black;
+            display: block;
+            top: 0;
+            left: 5px;
+            content: "";
+            background: linear-gradient(to right, #e7e4e4 50%, #ffffff);
+            width: 180%;
+            float: left;
+            text-decoration: none;
+            list-style-type: none;
+        }
+
+        .font-s {
+
+            color: rgb(255, 255, 255);
+            font-size: 20px;
+
+        }
+
+        li a:hover:not(.font-1) {
+            background-color: #4CAF50;
+            list-style-type: none;
+            overflow: hidden;
+        }
+
+        .font-ss {
+            color: rgb(255, 255, 255);
+            font-size: 20px;
+            background-color: #4CAF50;
+            list-style-type: none;
+            text-decoration: none;
+
+        }
+
+        .font-1 {
+            color: black;
+            font-size: 12px;
+            list-style-type: none;
+            text-decoration: none;
+
+        }
+    </style>
+
+</head>
+
+<body>
+
+
+    <script type="text/javascript">
+
+        //node.js설치후 cmd에서 http-server구동하여 자체적 가상서버를 구동함. 
+
+        async function plot(pointsArray, featureName, predictedPointsArray = null) { //predictedPointsArray:회귀선 작도를 위한 작업 
+            // const values = [pointsArray];
+            const values = [pointsArray.slice(0, 1000)];
+            const series = ["original"];
+
+            if (Array.isArray(predictedPointsArray)) {
+                values.push(predictedPointsArray);
+                series.push("predicted");
+            }
+
+            tfvis.render.scatterplot(
+                { name: `${featureName} vs House Price` },
+                // { values: [pointsArray], series: ["original"] },
+                { values, series },
+                {
+                    xLabel: featureName,
+                    yLabel: "Price",
+                }
+            )
+
+        }
+
+        //추세서 생성
+        //normalise는 딥러닝이 연산처리의 효율성을 위해서 진행, denormalise는 실제 활용할 수로 재변환
+        async function plotPredictionLine() {
+            const [xs, ys] = tf.tidy(() => {
+                const normalisedXs = tf.linspace(0, 1, 100); //그래스호퍼 시리즈와 같은것 0~1을 100등분
+                const normalisedYs = model.predict(normalisedXs.reshape([100, 1]));
+
+                const xs = denormalise(normalisedXs, normalisedFeature.min, normalisedFeature.max);
+                const ys = denormalise(normalisedYs, normalisedLabel.min, normalisedLabel.max);
+
+                return [xs.dataSync(), ys.dataSync()];
+            });
+
+            const predictedPoints = Array.from(xs).map((val, index) => {
+                return { x: val, y: ys[index] };
+            });
+
+            await plot(points, "주거면적", predictedPoints);
+        }
+
+        function normalise(tensor, previousMin = null, previousMax = null) {
+            const min = previousMin || tensor.min();
+            const max = previousMax || tensor.max();
+            const normalisedTensor = tensor.sub(min).div(max.sub(min));
+            return {
+                tensor: normalisedTensor,
+                min,
+                max
+            };
+        }
+
+        function denormalise(tensor, min, max) {
+            const denormalisedTensor = tensor.mul(max.sub(min)).add(min);
+            return denormalisedTensor;
+        }
+
+        let model;
+
+        function createModel() {
+            //신경망 모델 초기화 셋팅
+            model = tf.sequential();
+
+            //Dense레이어: 신경망에 필요한 고밀도 레이어
+            model.add(tf.layers.dense({
+                //덴스레이어 구조셋팅(현재는 단일레이어)
+                units: 1, //레이어의 갯수
+                // units: 4,
+                useBias: true, //true는 계층에 하나의 매개변수 추가함. 데이터 치움침 가동, bias 즉 편향을 추가하면 보다 명확한 결정을 유도함.
+                // useBias: false, //false는 계층에 하나의 매개변수를 줄임. 데이터의 치우침 가동 X
+                activation: 'linear',
+                inputDim: 1,
+            }));
+
+            //최적화 함수 : 손실과 파라미터 사이를 오가며 최적화 데이터를 도출 (대표적 최적화 함수 : SGD)
+            //SGD: 학습비율을 지정하고 구동하는 최적화함수, Adam: 학습비율을 지정하지 않고 고동하는 최적화함수
+            //SGD(학습률)
+            const optimizer = tf.train.sgd(0.1);
+
+            //모델 생성 수행
+            model.compile({
+                loss: 'meanSquaredError',  //손실함수 : 손실량을 측정, 최적화 함수와 상호 작용을 위한 함수
+                optimizer,
+            });
+
+            //단일레이어를 추가한 다음 모델을 반환 
+            return model;
+        }
+
+
+        //컴파일한 모델 훈련
+        async function trainModel(model, trainingFeatureTensor, trainingLabelTensor) {
+
+            const { onBatchEnd, onEpochEnd } = tfvis.show.fitCallbacks(
+                { name: "Training Performance" },
+                ['loss']
+            )
+
+            return model.fit(trainingFeatureTensor, trainingLabelTensor, {
+                batchSize: 1000, //한번epoch당 푸는 량 : batchSize의 푸는 량이 중요함. 512보다 32가 보다더 효율적일 수 있음 512는 너무 건너띄면서 작업 진행
+                // batchSize: 64,
+                epochs: 50, //훈련 반복 횟수
+                validationSplit: 0.2, //교육세트의 20% 검증 목적 
+                callbacks: {
+                    // onEpochEnd: (epoch, log) => console.log(`Epoch ${epoch}: loss = ${log.loss}`) //콘솔창에 처리과정을 보여주는 코드 
+                    onEpochEnd, onBatchEnd,
+                    // onEpochEnd, //속도를 빠르게 진행하기 위해서는 onBatchEnd의 보여지는 부분은 제거 
+                    onEpochBegin: async function () {
+                        await plotPredictionLine();
+                        //레이어 생성_첫번째 레이어
+                        const layer = model.getLayer(undefined, 0); //정의되지 않은채로 데이터 삽입
+                        //레이어 이름 지정
+                        tfvis.show.layer({ name: "레이어 1" }, layer); //우리는 입력에 적용되는 가중치인 커널을 레이어나 다른 커널에 가지고 있음.
+                    }
+                }
+            });
+        }
+
+        async function toggleVisor() {
+            tfvis.visor().toggle();
+        }
+
+        async function train() {
+            //train버튼 함수 실행시 해당 id의 항목들 모두 비활성화
+            ["train", "test", "load", "predict", "save"].forEach(id => {
+                document.getElementById(`${id}-button`).setAttribute("disabled", "disabled");
+            });
+
+            document.getElementById("model-status").innerHTML = "모델 훈련 중...";
+            //모델 만들기 
+            const model = createModel();
+
+            //모델 요약
+            model.summary();
+
+            //모델 요약을 visor에 표현
+            tfvis.show.modelSummary({ name: "모델 요약" }, model);
+
+            //레이어 생성_첫번째 레이어
+            const layer = model.getLayer(undefined, 0); //정의되지 않은채로 데이터 삽입
+
+            //레이어 이름 지정
+            tfvis.show.layer({ name: "레이어 1" }, layer); //우리는 입력에 적용되는 가중치인 커널을 레이어나 다른 커널에 가지고 있음.
+            await plotPredictionLine();
+
+            //모델 훈련
+            // await trainModel(model, trainingFeatureTensor, trainingLabelTensor);
+            //모델 훈련 후 result에 할당
+            const result = await trainModel(model, trainingFeatureTensor, trainingLabelTensor);
+            console.log(result);
+            //손실값의 기록 중 제일 마지막 값을 추출함
+            const trainingLoss = result.history.loss.pop();
+            console.log(`Training set loss: ${trainingLoss}`);
+
+            //테스트 20%에 대한 손실값의 기록 중 제일 마지막 값을 추출함
+            const validationLoss = result.history.val_loss.pop();
+            console.log(`Validation set loss: ${validationLoss}`);
+
+            //훈련 완료 후... 완료문구 내보냄
+            document.getElementById("model-status").innerHTML = "Trained (unsaved)\n"
+                + `Loss: ${trainingLoss.toPrecision(5)}\n`
+                + `Validation loss: ${validationLoss.toPrecision(5)}`;
+            document.getElementById("test-button").removeAttribute("disabled"); //해당위치에서 disable삭제해 버튼 활성화 시킴 
+            document.getElementById("save-button").removeAttribute("disabled");
+            document.getElementById("predict-button").removeAttribute("disabled");
+            document.getElementById("down-button").removeAttribute("disabled");
+            document.getElementById("down-csv").removeAttribute("disabled");
+
+        }
+
+        async function test() {
+            //테스트 진행
+            const lossTensor = model.evaluate(testingFeatureTensor, testingLabelTensor);
+            const loss = (await lossTensor.dataSync())[0];
+            //테스트의 손실값 출력
+            console.log(`Testing set loss: ${loss}`);
+
+
+            // document.getElementById("model-status").innerHTML = "모델 훈련 완료 (저장 전) \n"
+            //    + "Loss: ${loss.toPrecision(5)}\n"
+            //    + "Validation loss: ${validationLoss.toPrecision(5)}";
+
+            document.getElementById("testing-status").innerHTML = `테스트 후 손실정도: ${loss.toPrecision(5)}`;
+
+
+        }
+
+        const storageID = "kc-house-price-regression"; //저장하는 모델의 파일명. 자유롭게 설정가능
+        async function save() {
+            const saveResults = await model.save(`localstorage://${storageID}`);
+            document.getElementById("model-status").innerHTML = `훈련된 모델은 ${saveResults.modelArtifactsInfo.dateSaved}로 저장됩니다.`; //console.log(saveResults)를 살펴보면 보임
+
+        }
+        async function down() {
+            const saveResults = await model.save('downloads://my-model-1');
+            documet.getElementById("down-button").innerHTML = '훈련된 모델은 download폴더로 저장됩니다.'
+
+        }
+        //CSV 다운로드 시도..(실패)
+
+        // async function downcsv() {
+        //     var CSV = "hihw"
+        //     data.forEach(function (Row) {
+        //         csv += row.join(',')
+        //         csv += '\n'
+        //     })
+        //     const saveResults = 
+        // }
+
+        async function load() {
+            const storageKey = `localstorage://${storageID}`;
+            const models = await tf.io.listModels();
+            const modelInfo = models[storageKey];
+            if (modelInfo) {
+                model = await tf.loadLayersModel(storageKey);
+
+                //모델 요약을 visor에 표현
+                tfvis.show.modelSummary({ name: "모델 요약" }, model);
+
+                //레이어 생성_첫번째 레이어
+                const layer = model.getLayer(undefined, 0); //정의되지 않은채로 데이터 삽입
+
+                //레이어 이름 지정
+                tfvis.show.layer({ name: "레이어 1" }, layer); //우리는 입력에 적용되는 가중치인 커널을 레이어나 다른 커널에 가지고 있음.
+
+                await plotPredictionLine(); //비동기화 함수 async를 그때 그때 불러서 사용하려고 await를 앞에 붙임. 자바스크립트가 원쓰레드 방식 즉 한방향으로 흘러가는 방식이기 때문에 
+                //비동기 함수가 필요함. 
+
+                document.getElementById("model-status").innerHTML = `훈련된 모델은 ${modelInfo.dateSaved}로 저장됩니다.`; //console.log(saveResults)를 살펴보면 보임
+                document.getElementById("test-button").removeAttribute("disabled");
+                document.getElementById("predict-button").removeAttribute("disabled");
+            }
+            else {
+                alert("저장된 모델을 찾을 수 없습니다.");
+            }
+        }
+
+        //생성된 모형으로 데이터 예측함.
+        async function predict() {
+            const predictionInput = parseInt(document.getElementById("prediction-input").value);
+            if (isNaN(predictionInput)) {
+                alert("유효한 숫자(정수만)를 넣어주세요.");
+            } else if (predictionInput < 200) {
+                alert("200이상의 숫자를 입력해 주세요.");
+            } else {
+                tf.tidy(() => {
+                    const inputTensor = tf.tensor1d([predictionInput]);
+                    const normalisedInput = normalise(inputTensor, normalisedFeature.min, normalisedFeature.max);
+                    const normalisedOutputTensor = model.predict(normalisedInput.tensor);
+                    const outputTensor = denormalise(normalisedOutputTensor, normalisedLabel.min, normalisedLabel.max);
+                    const outputValue = outputTensor.dataSync()[0];
+                    const outputValueRounded = (outputValue / 1000).toFixed(0) * 1000;
+                    document.getElementById("prediction-output").innerHTML = `예측된 집의 가격은 <br>` + `<span style="font-size: 2em">\$${outputValueRounded}</span>`;
+                });
+            }
+        }
+        // 예측 모형에 기존 데이터를 입력하여 예측값을 추출하기 
+        const dataY = [];
+        async function inputXdata() {
+        }
+
+        // 추출된 예측 값을 기존 데이터와 결합하여 최종 데이터 생성
+
+        // 최종데이터를 웹에 저장, 다운로드 
+
+        //let 글로벌 버전 변수선언 : let == global
+        let points;
+        let normalisedFeature, normalisedLabel;
+        let trainingFeatureTensor, testingFeatureTensor, trainingLabelTensor, testingLabelTensor;
+
+        async function run() {
+            //CSV 데이터 삽입 
+            // const houseSalesDataset = tf.data.csv("http://127.0.0.1:8080/kc_house_data.csv");
+            const houseSalesDataset = tf.data.csv("http://ar-finger.com/kc_house_data.csv");
+
+
+            //그래프를 위해서 x와 y값 출력 
+            const pointsDataset = houseSalesDataset.map(record => ({
+                x: record.sqft_lot,
+                y: record.price,
+            }));
+
+            points = await pointsDataset.toArray();
+            if (points.length % 2 !== 0) { //만약 요소가 짝수가 아니면, 하나오브제를 pop으로 제거함.
+                points.pop();
+            }
+
+            tf.util.shuffle(points);
+            plot(points, "Square feet")
+
+            // Feature (input)
+            const featureValues = points.map(p => p.x);
+            const featureTensor = tf.tensor2d(featureValues, [featureValues.length, 1]);
+
+            //Labels (output)
+            const labelValues = points.map(p => p.y);
+            const labelTensor = tf.tensor2d(labelValues, [labelValues.length, 1]);
+
+
+            //데이터 정규화 
+            // const normalisedFeature = normalise(featureTensor);
+            // const normalisedLabel = normalise(labelTensor);
+
+            // const [trainingFeatureTensor, testingFeatureTensor] = tf.split(normalisedFeature.tensor, 2);
+            // const [trainingLabelTensor, testingLabelTensor] = tf.split(normalisedLabel.tensor, 2);
+            //trainingFeatureTensor.print(true);
+
+            normalisedFeature = normalise(featureTensor);
+            normalisedLabel = normalise(labelTensor);
+            featureTensor.dispose(); //dispose는 블렌더 모델링과 같이 메모리 관리를 위해 불필요한것을 제거한다는 의미
+            labelTensor.dispose(); //labelTensor는 블렌더 모델링과 같이 메모리 관리를 위해 불필요한것을 제거한다는 의미
+
+            [trainingFeatureTensor, testingFeatureTensor] = tf.split(normalisedFeature.tensor, 2);
+            [trainingLabelTensor, testingLabelTensor] = tf.split(normalisedLabel.tensor, 2);
+
+            //상태업데이트 및 비활성되어있던 버튼의 활성화 작업
+            document.getElementById("model-status").innerHTML = "No model trained";
+            document.getElementById("train-button").removeAttribute("disabled");
+            document.getElementById("load-button").removeAttribute("disabled");
+            document.getElementById("down-button").removeAttribute("disabled");
+
+
+
+        }
+
+        run();
+    </script>
+
+    <div id="wrapper">
+        <!-- Header Container
+================================================== -->
+        <header id="header-container" class="fullwidth">
+
+            <!-- Header -->
+            <div id="header" class="not-sticky">
+                <div class="container">
+
+                    <!-- Left Side Content -->
+                    <div class="left-side">
+                        <!-- 헤더 부분 -->
+                        <!-- logo 작성-->
+                        <div style=" float:left;">
+                            <a href="index.html"><img src="image/noname01.png"></a>
+                        </div>
+                        <!-- Mobile Navigation -->
+                        <div class=" mmenu-trigger">
+                            <button class="hamburger hamburger--collapse" type="button">
+                                <span class="hamburger-box">
+                                    <span class="hamburger-inner"></span>
+                                </span>
+                            </button>
+                        </div>
+                        <!-- Main Navigation -->
+                        <nav id="navigation" class="style-8">
+                            <ul id="responsive">
+
+                                <li><a href="#" class="font-ss">Home</a>
+                                    <ul class="style-9">
+                                        <li><a class="font-1" href="nono.html">HOME</a></li>
+                                        <li><a class="font-1" href="index02.html">price prediction</a></li>
+                                        <li><a class="font-1" href="C:/Users/SUN/study-housing/index.html">price 02</a>
+                                        </li>
+
+                                    </ul>
+                                </li>
+
+                                <li><a class="font-s" href="#">Listings</a>
+                                    <ul class="style-9">
+                                        <li><a class="font-1" href="#">List Layout</a>
+                                            <ul class="style-9">
+                                                <li><a class="font-1" href="">With Sidebar</a></li>
+                                                <li><a class="font-1" href="">Full Width</a></li>
+                                                <li><a class="font-1" href="">Full Width +
+                                                        Map</a></li>
+                                            </ul>
+                                        </li>
+                                        <li><a class="font-1" href="#">Grid Layout</a>
+                                            <ul class="style-9">
+                                                <li><a class="font-1" href="">With Sidebar 1</a></li>
+                                                <li><a class="font-1" href="">With Sidebar 2</a></li>
+                                                <li><a class="font-1" href="">Full Width</a></li>
+                                                <li><a class="font-1" href="">Full Width +
+                                                        Map</a></li>
+                                            </ul>
+                                        </li>
+                                        <li><a class="font-1" href="#">Half Screen Map</a>
+                                            <ul class="style-9">
+                                                <li><a class="font-1" href="">List Layout</a></li>
+                                                <li><a class="font-1" href="">Grid Layout 1</a>
+                                                </li>
+                                                <li><a class="font-1" href="">Grid Layout 2</a>
+                                                </li>
+                                            </ul>
+                                        </li>
+                                        <li><a class="font-1" href="#">Single Listings</a>
+                                            <ul class="style-9">
+                                                <li><a class="font-1" href="">Single Listing 1</a></li>
+                                                <li><a class="font-1" href="">Single Listing 2</a></li>
+                                                <li><a class="font-1" href="">Single Listing 3</a></li>
+                                            </ul>
+                                        </li>
+                                        <li><a class="font-1" href="#">Open Street Map</a>
+                                            <ul class="style-9">
+                                                <li><a class="font-1" href="">Half
+                                                        Screen Map List Layout</a></li>
+
+                                                <li><a class="font-1" href="">Full
+                                                        Width List</a></li>
+                                                <li><a class="font-1" href="">Full
+                                                        Width Grid</a></li>
+                                                <li><a class="font-1" href="">Single Listing</a>
+                                                </li>
+                                            </ul>
+                                        </li>
+                                    </ul>
+                                </li>
+
+                                <li><a href="#" class="font-s">User Panel</a>
+                                    <ul class="style-9">
+                                        <li><a href="" class="font-1">Dashboard</a></li>
+                                        <li><a href="" class="font-1">Messages</a></li>
+                                        <li><a href="" class="font-1">Bookings</a></li>
+                                        <li><a href="" class="font-1">Wallet</a></li>
+                                        <li><a href="" class="font-1">My Listings</a></li>
+                                        <li><a href="" class="font-1">Reviews</a></li>
+                                        <li><a href="" class="font-1">Bookmarks</a></li>
+                                        <li><a href="" class="font-1">Add Listing</a></li>
+                                        <li><a href="" class="font-1">My Profile</a></li>
+                                        <li><a href="" class="font-1">Invoice</a></li>
+                                    </ul>
+                                </li>
+
+                                <li><a href="#" class="font-s">Pages</a>
+                                    <div class="mega-menu mobile-styles three-columns">
+
+                                        <div class="mega-menu-section">
+                                            <ul>
+                                                <li class="mega-menu-headline">Pages #1</li>
+                                                <li><a href=""><i class="sl sl-icon-user"></i>
+                                                        User Profile</a></li>
+                                                <li><a href=""><i class="sl sl-icon-check"></i>
+                                                        Booking Page</a></li>
+                                                <li><a href=""><i class="sl sl-icon-plus"></i> Add
+                                                        Listing</a></li>
+                                                <li><a href=""><i class="sl sl-icon-docs"></i> Blog</a>
+                                                </li>
+                                            </ul>
+                                        </div>
+
+                                        <div class="mega-menu-section">
+                                            <ul>
+                                                <li class="mega-menu-headline">Pages #2</li>
+                                                <li><a href=""><i class="sl sl-icon-envelope-open"></i> Contact</a></li>
+                                                <li><a href=""><i class="sl sl-icon-hourglass"></i> Coming Soon</a></li>
+                                                <li><a href=""><i class="sl sl-icon-close"></i> 404
+                                                        Page</a></li>
+                                                <li><a href=""><i class="sl sl-icon-equalizer"></i> Masonry
+                                                        Filtering</a></li>
+                                            </ul>
+                                        </div>
+
+                                        <div class="mega-menu-section">
+                                            <ul>
+                                                <li class="mega-menu-headline">Other</li>
+                                                <li><a href=""><i class="sl sl-icon-settings"></i>
+                                                        Elements</a></li>
+                                                <li><a href=""><i class="sl sl-icon-tag"></i>
+                                                        Pricing Tables</a></li>
+                                                <li><a href=""><i class="sl sl-icon-pencil"></i>
+                                                        Typography</a></li>
+                                                <li><a href=""><i class="sl sl-icon-diamond"></i>
+                                                        Icons</a></li>
+                                            </ul>
+                                        </div>
+
+                                    </div>
+                                </li>
+
+                            </ul>
+                        </nav>
+                        <div class="clearfix"></div>
+                    </div>
+
+
+
+                    <!-- Sign In Popup / End -->
+                </div>
+            </div>
+            <!-- Header / End -->
+        </header>
+        <div class="clearfix"></div>
+
+        <!-- 버튼 부분 -->
+        <div class="fs-container">
+
+            <div class="fs-inner-container content">
+                <div class="fs-content">
+                    <!--<section class="listings-container margin-top-30">-->
+                    <!-- Search -->
+                    <section class="search">
+
+                        <div class="row">
+                            <div class="col-md-12">
+
+                                <!-- Row With Forms -->
+                                <div>
+
+                                    <!-- 지역 검색과 딥러닝 시각 버튼 활성화 -->
+                                    <div class="col-fs-6">
+                                        <h5 class="header center" style="font-size: 20px; font-weight: bold;">딥러닝 기반
+                                            집값 예측 시스템</h5>
+                                        <h6 class="header center ">주거 공간 대비 집값 예측을 위한 훈련 모델</h6>
+                                        <div class="header center">
+                                            <button id="toggle-button" class="wave-effect waves-light  btn-small"
+                                                style="background-color: #4CAF50;" onclick="toggleVisor()">딥러닝
+                                                시각화</button>
+                                        </div>
+                                        <p>
+                                            <label for="amount">Price range:</label>
+                                            <input type="text" id="amount" readonly
+                                                style="border:0; color:#f6931f; font-weight:bold;">
+                                        </p>
+
+                                        <div id="slider-range"></div>
+                                    </div>
+
+                                    <!-- Main Search Input -->
+                                    <div class="col-fs-6">
+                                        <div class="input-with-icon location">
+                                            <div id="autocomplete-container" data-autocomplete-tip="type and hit enter">
+                                                <input id="autocomplete-input" type="text" placeholder="Location">
+                                            </div>
+                                            <a href="#"><i class="fa fa-map-marker"></i></a>
+                                        </div>
+                                    </div>
+
+
+                                    <!-- Filters -->
+                                    <div class="col-fs-6">
+
+                                        <!-- Panel Dropdown / End -->
+                                        <div class="panel-dropdown">
+                                            <a href="#">Categories</a>
+                                            <div class="panel-dropdown-content checkboxes categories">
+
+                                                <!-- Checkboxes -->
+                                                <div class="row">
+                                                    <div class="col-md-6">
+                                                        <input id="check-1" type="checkbox" name="check" checked
+                                                            class="all">
+                                                        <label for="check-1">All Categories</label>
+
+                                                        <input id="check-2" type="checkbox" name="check">
+                                                        <label for="check-2">Shops</label>
+
+                                                        <input id="check-3" type="checkbox" name="check">
+                                                        <label for="check-3">Hotels</label>
+                                                    </div>
+
+                                                    <div class="col-md-6">
+                                                        <input id="check-4" type="checkbox" name="check">
+                                                        <label for="check-4">Eat & Drink</label>
+
+                                                        <input id="check-5" type="checkbox" name="check">
+                                                        <label for="check-5">Fitness</label>
+
+                                                        <input id="check-6" type="checkbox" name="check">
+                                                        <label for="check-6">Events</label>
+                                                    </div>
+                                                </div>
+
+                                                <!-- Buttons -->
+                                                <div class="panel-buttons">
+                                                    <button class="panel-cancel">Cancel</button>
+                                                    <button class="panel-apply">Apply</button>
+                                                </div>
+
+                                            </div>
+                                        </div>
+                                        <!-- Panel Dropdown / End -->
+
+                                        <!-- Panel Dropdown -->
+                                        <div class="panel-dropdown wide">
+                                            <a href="#">More Filters</a>
+                                            <div class="panel-dropdown-content checkboxes">
+
+                                                <!-- Checkboxes -->
+                                                <div class="row">
+                                                    <div class="col-md-6">
+                                                        <input id="check-a" type="checkbox" name="check">
+                                                        <label for="check-a">Elevator in building</label>
+
+                                                        <input id="check-b" type="checkbox" name="check">
+                                                        <label for="check-b">Friendly workspace</label>
+
+                                                        <input id="check-c" type="checkbox" name="check">
+                                                        <label for="check-c">Instant Book</label>
+
+                                                        <input id="check-d" type="checkbox" name="check">
+                                                        <label for="check-d">Wireless Internet</label>
+                                                    </div>
+
+                                                    <div class="col-md-6">
+                                                        <input id="check-e" type="checkbox" name="check">
+                                                        <label for="check-e">Free parking on premises</label>
+
+                                                        <input id="check-f" type="checkbox" name="check">
+                                                        <label for="check-f">Free parking on street</label>
+
+                                                        <input id="check-g" type="checkbox" name="check">
+                                                        <label for="check-g">Smoking allowed</label>
+
+                                                        <input id="check-h" type="checkbox" name="check">
+                                                        <label for="check-h">Events</label>
+                                                    </div>
+                                                </div>
+
+                                                <!-- Buttons -->
+                                                <div class="panel-buttons">
+                                                    <button class="panel-cancel">Cancel</button>
+                                                    <button class="panel-apply">Apply</button>
+                                                </div>
+
+                                            </div>
+                                        </div>
+                                        <!-- Panel Dropdown / End -->
+
+                                        <!-- Panel Dropdown -->
+                                        <div class="panel-dropdown">
+                                            <a href="#">Distance Radius</a>
+                                            <div class="panel-dropdown-content">
+                                                <input class="distance-radius" type="range" min="1" max="100" step="1"
+                                                    value="50" data-title="Radius around selected destination">
+                                                <div class="panel-buttons">
+                                                    <button class="panel-cancel">Disable</button>
+                                                    <button class="panel-apply">Apply</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- Panel Dropdown / End -->
+
+                                    </div>
+                                    <!-- Filters / End -->
+
+                                </div>
+                                <!-- Row With Forms / End -->
+
+                            </div>
+                        </div>
+
+                    </section>
+                    <!--</section>-->
+
+                    <!-- Search / End -->
+
+                    <!-- Content
+================================================== -->
+                    <section class="listings-container margin-top-30">
+                        <div class="row fs-switcher">
+
+                            <div class="col-md-6">
+                                <!-- Showing Results -->
+                                <p class="showing-results">훈련 및 예측 </p>
+                            </div>
+
+                        </div>
+                        <!-- 주요 기능 -->
+                        <div class="row fs-listings">
+                            <div class="col-lg-12 col-md-12">
+                                <div class="container">
+                                    <div class="section">
+
+                                        <div class="row">
+                                            <!-- Training -->
+                                            <div class="col s12 m5">
+                                                <div class="icon-block">
+                                                    <h3 class="center green-text"><i class="im im-icon-Chip"
+                                                            style="font-size: 3em">
+                                                        </i>
+                                                    </h3>
+                                                    <h5 class="center">훈련 및 테스트</h5>
+
+                                                    <p class="light"></p>
+
+                                                    <div>
+                                                        <p><label>훈련 상태:</label></p>
+                                                        <pre class="grey lighten-4"
+                                                            style="overflow-x: auto"><em id="model-status">데이터 불러오기...</em></pre>
+
+                                                        <p><label>테스트 상태</label></p>
+                                                        <pre class="grey lighten-4"
+                                                            style="overflow-x: auto"><em id="testing-status">아직 테스트 하지 않음</em></pre>
+
+                                                        <button autocomplete="off" id="train-button"
+                                                            class="waves-effect green waves-light btn" disabled
+                                                            onclick="train()">새로운
+                                                            훈련 모델</button>
+                                                        <button autocomplete="off" id="test-button"
+                                                            class="waves-effect green waves-light btn" disabled
+                                                            onclick="test()">테스트
+                                                            모델</button>
+                                                    </div>
+                                                    <br />
+
+                                                    <div>
+                                                        <button autocomplete="off" id="load-button"
+                                                            class="waves-effect green waves-light btn" disabled
+                                                            onclick="load()">모델
+                                                            불러오기</button>
+                                                        <button autocomplete="off" id="save-button"
+                                                            class="waves-effect green waves-light btn" disabled
+                                                            onclick="save()">모델
+                                                            저장</button>
+                                                        <button autocomplete="off" id="down-button"
+                                                            class="waves-effect green waves-light btn" disabled
+                                                            onclick="down()">모델 다운로드</button>
+                                                    </div>
+
+                                                </div>
+                                            </div>
+
+                                            <!-- 예측 -->
+                                            <div class="col s12 m4">
+                                                <div class="icon-block">
+                                                    <h3 class="center green-text"><i class="im im-icon-Line-Chart"
+                                                            style="font-size: 3em"></i>
+                                                    </h3>
+                                                    <h5 class="center">예측</h5>
+                                                    <label>주거면적에 대한 면적: <input type="number" id="prediction-input"
+                                                            placeholder="Please enter the figures" /></label>
+                                                    <button autocomplete="off" id="predict-button"
+                                                        class="waves-effect light-blue waves-light btn" disabled
+                                                        onclick="predict()">집값
+                                                        예측</button>
+                                                    <p><strong id="prediction-output"></strong></p>
+
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="clearfix"></div>
+                                <!-- Copyrights -->
+                                <div class="copyrights margin-top-0">© 2020 ADCC. All Rights Reserved.
+                                </div>
+
+                            </div>
+                        </div>
+                        <!-- Pagination Container / End -->
+                        <!-- Pagination Container -->
+                        <div class="row fs-listings">
+                            <div class="col-md-12">
+                            </div>
+                        </div>
+                        <!-- Pagination / End -->
+                    </section>
+
+                </div>
+            </div>
+            <div class="fs-inner-container map-fixed">
+
+                <!-- Map -->
+                <div id="map-container">
+                    <div id="map" data-map-scroll="true">
+                        <!-- map goes here -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Wrapper / End -->
+    <!-- Scripts
+================================================== -->
+    <script type="text/javascript" src="scripts/jquery-3.4.1.min.js"></script>
+    <script type="text/javascript" src="scripts/jquery-migrate-3.1.0.min.js"></script>
+    <script type="text/javascript" src="scripts/mmenu.min.js"></script>
+    <script type="text/javascript" src="scripts/chosen.min.js"></script>
+    <script type="text/javascript" src="scripts/slick.min.js"></script>
+    <script type="text/javascript" src="scripts/rangeslider.min.js"></script>
+    <script type="text/javascript" src="scripts/magnific-popup.min.js"></script>
+    <script type="text/javascript" src="scripts/waypoints.min.js"></script>
+    <script type="text/javascript" src="scripts/counterup.min.js"></script>
+    <script type="text/javascript" src="jquery-ui/jquery-ui.min.js"></script>
+    <script type="text/javascript" src="scripts/tooltips.min.js"></script>
+    <script type="text/javascript" src="scripts/custom.js"></script>
+    <!-- Leaflet // Docs: https://leafletjs.com/ -->
+    <script src="scripts/leaflet.min.js"></script>
+
+    <!-- Leaflet Maps Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.4.0/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/5.9.7/d3.min.js"></script>
+    <script src="scripts/maps.js"></script>
+
+    <!-- Leaflet Geocoder + Search Autocomplete // Docs: https://github.com/perliedman/leaflet-control-geocoder -->
+    <script src="scripts/leaflet-autocomplete.js"></script>
+    <script src="scripts/leaflet-control-geocoder.js"></script>
+    <script>
+        $(function () {
+            $("#slider-range").slider({
+                range: true,
+                min: 0,
+                max: 500,
+                values: [75, 300],
+                slide: function (event, ui) {
+                    $("#amount").val("$" + ui.values[0] + " - $" + ui.values[1]);
+                }
+            });
+            $("#amount").val("$" + $("#slider-range").slider("values", 0) +
+                " - $" + $("#slider-range").slider("values", 1));
+        });
+    </script>
+</body>
+
+
+
+</html>
